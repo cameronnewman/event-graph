@@ -4,19 +4,20 @@ import { requireOrgId, requireUuidParam } from '../middleware.js';
 
 export const iterationsRouter = Router();
 
-// Switch to a specific iteration of the loop that :eventId belongs to.
+// Switch the loop event at :parentId to its sibling at iter=:iteration.
 //
-// :eventId must be a loop event (loop_id IS NOT NULL); otherwise 404.
-// The sibling at iter=:iteration under the same parent + loop_id is returned.
-// Subtree drill-down is the caller's job — feed the returned id back into
-// GET /events/:id/children.
+// :parentId must be a loop event (loop_id IS NOT NULL) belonging to
+// :executionId; otherwise 404. Subtree drill-down is the caller's job —
+// feed the returned id back into GET /executions/:id/timeline/:newParentId.
 iterationsRouter.get(
-  '/events/:eventId/iterations/:iteration',
+  '/executions/:executionId/timeline/:parentId/iteration/:iteration',
   async (req, res) => {
     const orgId = requireOrgId(req, res);
     if (!orgId) return;
-    const eventId = requireUuidParam(req, res, 'eventId');
-    if (!eventId) return;
+    const executionId = requireUuidParam(req, res, 'executionId');
+    if (!executionId) return;
+    const parentId = requireUuidParam(req, res, 'parentId');
+    if (!parentId) return;
 
     const iteration = Number(req.params.iteration);
     if (!Number.isInteger(iteration) || iteration < 0) {
@@ -27,9 +28,10 @@ iterationsRouter.get(
     }
 
     const { rows: anchorRows } = await pool.query(
-      `SELECT execution_id, parent_id, loop_id
-         FROM events WHERE id = $1 AND org_id = $2`,
-      [eventId, orgId],
+      `SELECT parent_id, loop_id
+         FROM events
+        WHERE id = $1 AND org_id = $2 AND execution_id = $3`,
+      [parentId, orgId, executionId],
     );
     if (anchorRows.length === 0) {
       res.status(404).json({ error: 'event not found' });
@@ -53,7 +55,7 @@ iterationsRouter.get(
           AND iteration = $5`,
       [
         orgId,
-        anchor.execution_id,
+        executionId,
         anchor.parent_id,
         anchor.loop_id,
         iteration,

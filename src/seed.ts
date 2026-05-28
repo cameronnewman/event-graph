@@ -322,10 +322,10 @@ async function seed() {
     `  curl -H "x-org-id: ${orgId}" "${base}/executions/${samples.executionId}/graph?depth=10"`,
   );
   console.log(
-    `  curl -H "x-org-id: ${orgId}" "${base}/events/${samples.loopEventId}/children"`,
+    `  curl -H "x-org-id: ${orgId}" "${base}/executions/${samples.executionId}/timeline/${samples.loopEventId}"`,
   );
   console.log(
-    `  curl -H "x-org-id: ${orgId}" "${base}/events/${samples.loopEventId}/iterations/${samples.loopIterMax}"`,
+    `  curl -H "x-org-id: ${orgId}" "${base}/executions/${samples.executionId}/timeline/${samples.loopEventId}/iteration/${samples.loopIterMax}"`,
   );
 
   await pool.end();

@@ -17,12 +17,15 @@ Express API serving the execution graph timeline.
 All require an `x-org-id: <uuid>` header — the production design always predicates
 on `org_id` and the POC mirrors that.
 
-| Method | Path                                            | Maps to | Notes |
-|--------|-------------------------------------------------|---------|-------|
-| GET    | `/executions/:executionId/timeline`             | Q1      | Top-level events, loops collapsed to iter 0. |
-| GET    | `/events/:parentId/children?cursor=…`           | Q2      | Drill into a parent. Keyset cursor: `<ISO timestamp>\|<uuid>`. |
-| GET    | `/events/:eventId/iterations/:iteration`        | Q3      | Switch the loop event `:eventId` to its sibling at iter `N`. `:eventId` must be a loop event (`loop_id IS NOT NULL`) or 404. |
-| GET    | `/executions/:executionId/graph?depth=10`       | Query A | Recursive collapsed tree with redaction applied once in the outer SELECT. |
+All read paths keep the execution id in the URL — the timeline drills down
+from execution → parent → iteration as a single nested resource.
+
+| Method | Path                                                                            | Maps to | Notes |
+|--------|---------------------------------------------------------------------------------|---------|-------|
+| GET    | `/executions/:executionId/timeline`                                             | Q1      | Top-level events, loops collapsed to iter 0. |
+| GET    | `/executions/:executionId/timeline/:parentId?cursor=…`                          | Q2      | Drill into a parent (the cursor point). Keyset cursor: `<ISO timestamp>\|<uuid>`. |
+| GET    | `/executions/:executionId/timeline/:parentId/iteration/:iteration`              | Q3      | Switch the loop event `:parentId` to its sibling at iter `N`. `:parentId` must be a loop event (`loop_id IS NOT NULL`) within `:executionId` or 404. |
+| GET    | `/executions/:executionId/graph?depth=10`                                       | Query A | Recursive collapsed tree with redaction applied once in the outer SELECT. |
 
 ## Quickstart
 
