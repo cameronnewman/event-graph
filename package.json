@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "seed": "tsx src/seed.ts",
+    "test": "vitest run",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d postgres"
@@ -18,11 +19,13 @@
     "uuidv7": "^1.0.2"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^10.13.2",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.1",
     "@types/pg": "^8.11.10",
     "@types/pg-copy-streams": "^1.2.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.5"
   }
 }
