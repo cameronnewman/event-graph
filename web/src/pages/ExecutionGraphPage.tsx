@@ -69,7 +69,6 @@ export function ExecutionGraphPage() {
     if (!org || !executionId) return;
     setLoading(true);
     setError(null);
-    setSelected(null);
     Promise.all([
       api.graph(org.org_id, executionId, { depth }),
       api.execution(org.org_id, executionId),
@@ -80,6 +79,10 @@ export function ExecutionGraphPage() {
         setQuerySql(graphRes.query_sql);
         setQueryParams(graphRes.query_params);
         setDetail(execRes.execution);
+        // Land with the root selected so the JSON pane shows something
+        // immediately rather than the full-response dump.
+        const root = graphRes.events.find((e) => e.parent_id === null);
+        setSelected(root ?? graphRes.events[0] ?? null);
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));

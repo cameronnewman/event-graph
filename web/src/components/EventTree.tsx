@@ -95,7 +95,11 @@ function NodeRow({
   executionId: string;
 }) {
   const { org } = useOrg();
-  const [open, setOpen] = useState(depth < 2);
+  // Loop iterations stay folded by default — they're noisy and each iteration
+  // has the same step shape, so the first impression of the tree should be
+  // the workflow structure, not a wall of repeated tasks.
+  const isLoopIter = node.event_type === 'loop.iteration';
+  const [open, setOpen] = useState(depth < 2 && !isLoopIter);
   const [payloadOpen, setPayloadOpen] = useState(false);
   const [loopState, setLoopState] = useState<LoopSwapState>({
     iteration: 0,
