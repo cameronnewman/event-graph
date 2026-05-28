@@ -1,6 +1,22 @@
--- POC schema: events (immutable) + executions (mutable).
+-- POC schema: events (immutable) + executions (mutable) + workflows (catalog).
 -- Skips production CDC aggregations (execution_agg, event_agg) and Q4 workflow index.
 -- UUIDs are UUIDv7-generated in the app, so Postgres needs no extension.
+
+CREATE TABLE IF NOT EXISTS orgs (
+  org_id      UUID PRIMARY KEY,
+  name        TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS workflows (
+  workflow_id  UUID PRIMARY KEY,
+  org_id       UUID NOT NULL,
+  name         TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS workflows_org_idx
+  ON workflows (org_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS executions (
   execution_id  UUID PRIMARY KEY,
@@ -30,6 +46,10 @@ CREATE TABLE IF NOT EXISTS events (
   loop_id       TEXT GENERATED ALWAYS AS (metadata->>'loop_id') STORED,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- List executions for a workflow (SPA: workflow page).
+CREATE INDEX IF NOT EXISTS executions_workflow_idx
+  ON executions (org_id, workflow_id, started_at DESC);
 
 -- Q1: execution timeline, loops collapsed to first iteration
 CREATE INDEX IF NOT EXISTS events_exec_first_iter_idx

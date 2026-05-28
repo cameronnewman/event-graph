@@ -18,7 +18,7 @@ export function requireUuidParam(
   name: string,
 ): string | null {
   const v = req.params[name];
-  if (!v || !UUID_RE.test(v)) {
+  if (typeof v !== 'string' || !UUID_RE.test(v)) {
     res.status(400).json({ error: `${name} must be a UUID` });
     return null;
   }
