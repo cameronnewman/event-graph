@@ -1,4 +1,4 @@
-# event-graph
+# Workflow Execution event-graph
 
 <img width="1152" height="667" alt="image" src="https://github.com/user-attachments/assets/4e38f625-53b6-4d70-bd01-017985b03b64" />
 
