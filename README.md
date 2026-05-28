@@ -1,5 +1,7 @@
 # event-graph
 
+<img width="1152" height="667" alt="image" src="https://github.com/user-attachments/assets/4e38f625-53b6-4d70-bd01-017985b03b64" />
+
 A small demo that proves out the DAG-events Postgres design: workflow executions
 made of tens of thousands of parent/child events (with nested loops) stored in a
 single `events` table, served back as a paginated timeline and a recursive graph
