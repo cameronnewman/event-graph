@@ -43,7 +43,7 @@ describe('getGraph', () => {
       depth: 1,
       limit: 500,
     });
-    expect(d1.map((e) => e.name)).toEqual(['root']);
+    expect(d1.events.map((e) => e.name)).toEqual(['root']);
 
     const d2 = await getGraph(pool, {
       orgId: ctx.orgId,
@@ -51,7 +51,7 @@ describe('getGraph', () => {
       depth: 2,
       limit: 500,
     });
-    expect(d2.map((e) => e.name)).toEqual(['root', 'a']);
+    expect(d2.events.map((e) => e.name)).toEqual(['root', 'a']);
 
     const d10 = await getGraph(pool, {
       orgId: ctx.orgId,
@@ -59,7 +59,7 @@ describe('getGraph', () => {
       depth: 10,
       limit: 500,
     });
-    expect(d10.map((e) => e.name)).toEqual(['root', 'a', 'b', 'c']);
+    expect(d10.events.map((e) => e.name)).toEqual(['root', 'a', 'b', 'c']);
   });
 
   it('stamps each row with the correct depth', async () => {
@@ -81,7 +81,7 @@ describe('getGraph', () => {
       createdAt: at(t, 2),
     });
 
-    const rows = await getGraph(pool, {
+    const { events: rows } = await getGraph(pool, {
       orgId: ctx.orgId,
       executionId: ctx.executionId,
       depth: 10,
@@ -118,7 +118,7 @@ describe('getGraph', () => {
       createdAt: at(t, 3),
     });
 
-    const rows = await getGraph(pool, {
+    const { events: rows } = await getGraph(pool, {
       orgId: ctx.orgId,
       executionId: ctx.executionId,
       depth: 10,
@@ -148,7 +148,7 @@ describe('getGraph', () => {
       createdAt: at(t, 50),
     });
 
-    const rows = await getGraph(pool, {
+    const { events: rows } = await getGraph(pool, {
       orgId: ctx.orgId,
       executionId: ctx.executionId,
       depth: 10,
@@ -171,13 +171,71 @@ describe('getGraph', () => {
         createdAt: at(t, i + 1),
       });
     }
-    const rows = await getGraph(pool, {
+    const { events: rows, nextCursor } = await getGraph(pool, {
       orgId: ctx.orgId,
       executionId: ctx.executionId,
       depth: 10,
       limit: 4,
     });
     expect(rows).toHaveLength(4);
+    // limit was hit, so a cursor should be issued.
+    expect(nextCursor).not.toBeNull();
+  });
+
+  it('continues from the keyset cursor on the next page', async () => {
+    const ctx = makeContext();
+    const t = new Date('2026-01-01T00:00:00Z');
+    const root = await insertEvent(pool, ctx, {
+      parentId: null,
+      name: 'root',
+      createdAt: at(t, 0),
+    });
+    // root + 6 siblings = 7 rows at depths 1, 2*6.
+    for (let i = 0; i < 6; i++) {
+      await insertEvent(pool, ctx, {
+        parentId: root,
+        name: `c${i}`,
+        createdAt: at(t, i + 1),
+      });
+    }
+
+    const page1 = await getGraph(pool, {
+      orgId: ctx.orgId,
+      executionId: ctx.executionId,
+      depth: 10,
+      limit: 4,
+    });
+    expect(page1.events.map((r) => r.name)).toEqual([
+      'root',
+      'c0',
+      'c1',
+      'c2',
+    ]);
+    expect(page1.nextCursor).not.toBeNull();
+
+    const page2 = await getGraph(pool, {
+      orgId: ctx.orgId,
+      executionId: ctx.executionId,
+      depth: 10,
+      limit: 4,
+      after: parseAfter(page1.nextCursor!),
+    });
+    expect(page2.events.map((r) => r.name)).toEqual(['c3', 'c4', 'c5']);
+    // partial page, no more rows.
+    expect(page2.nextCursor).toBeNull();
+  });
+
+  it('returns null nextCursor when the result fits in one page', async () => {
+    const ctx = makeContext();
+    await insertEvent(pool, ctx, { parentId: null, name: 'root' });
+    const res = await getGraph(pool, {
+      orgId: ctx.orgId,
+      executionId: ctx.executionId,
+      depth: 10,
+      limit: 500,
+    });
+    expect(res.events).toHaveLength(1);
+    expect(res.nextCursor).toBeNull();
   });
 
   it('applies redaction in the outer SELECT', async () => {
@@ -186,14 +244,25 @@ describe('getGraph', () => {
       parentId: null,
       payload: { fields: [{ id: 'f', name: 'secret', value: 'redact-me' }] },
     });
-    const rows = await getGraph(pool, {
+    const { events: rows } = await getGraph(pool, {
       orgId: ctx.orgId,
       executionId: ctx.executionId,
       depth: 10,
       limit: 500,
     });
     expect(
-      (rows[0].payload as { fields: Array<{ value: string }> }).fields[0].value,
+      (rows[0]!.payload as { fields: Array<{ value: string }> }).fields[0]!
+        .value,
     ).toBe('[REDACTED]');
   });
 });
+
+function parseAfter(cursor: string) {
+  const first = cursor.indexOf('|');
+  const last = cursor.lastIndexOf('|');
+  return {
+    depth: Number(cursor.slice(0, first)),
+    createdAt: cursor.slice(first + 1, last),
+    id: cursor.slice(last + 1),
+  };
+}

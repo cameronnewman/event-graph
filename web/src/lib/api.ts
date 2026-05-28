@@ -95,14 +95,25 @@ export const api = {
   graph: (
     orgId: string,
     executionId: string,
-    opts: { depth?: number; rootEventId?: string } = {},
+    opts: {
+      depth?: number;
+      rootEventId?: string;
+      after?: string;
+      limit?: number;
+    } = {},
   ) => {
     const depth = opts.depth ?? 10;
+    const limit = opts.limit ?? 1000;
     const root = opts.rootEventId
       ? `&root_event_id=${encodeURIComponent(opts.rootEventId)}`
       : '';
-    return get<WithTiming<{ events: GraphEvent[] }>>(
-      `/executions/${executionId}/graph?depth=${depth}&limit=500${root}`,
+    const after = opts.after
+      ? `&after=${encodeURIComponent(opts.after)}`
+      : '';
+    return get<
+      WithTiming<{ events: GraphEvent[]; next_cursor: string | null }>
+    >(
+      `/executions/${executionId}/graph?depth=${depth}&limit=${limit}${root}${after}`,
       orgId,
     );
   },

@@ -24,6 +24,10 @@ export type IterationEventRow = EventRow & {
 
 export type Cursor = { createdAt: string; id: string };
 
+// Graph pagination cursor — keyset on the (depth, created_at, id) ordering
+// the outer SELECT uses. Encoded over the wire as "<depth>|<iso>|<uuid>".
+export type GraphCursor = { depth: number; createdAt: string; id: string };
+
 export type IterationLookup =
   | { kind: 'ok'; event: IterationEventRow }
   | { kind: 'event_not_found' }
@@ -44,6 +48,29 @@ export function parseCursor(s: string): Cursor | null {
 
 export function encodeCursor(row: { created_at: Date; id: string }): string {
   return `${row.created_at.toISOString()}|${row.id}`;
+}
+
+export function parseGraphCursor(s: string): GraphCursor | null {
+  // depth|iso-timestamp|uuid. ISO timestamp can contain ':' / '-' / '.' so we
+  // split by the first '|' for depth and the last '|' for id.
+  const first = s.indexOf('|');
+  const last = s.lastIndexOf('|');
+  if (first === -1 || last === first) return null;
+  const depth = Number(s.slice(0, first));
+  if (!Number.isInteger(depth)) return null;
+  return {
+    depth,
+    createdAt: s.slice(first + 1, last),
+    id: s.slice(last + 1),
+  };
+}
+
+export function encodeGraphCursor(row: {
+  depth: number;
+  created_at: Date;
+  id: string;
+}): string {
+  return `${row.depth}|${row.created_at.toISOString()}|${row.id}`;
 }
 
 // Q1
@@ -168,7 +195,9 @@ export async function getIterationSibling(
 // iteration_count is attached to every loop event so the SPA can render
 // a "switch iteration" dropdown without a second round trip. rootEventId
 // re-anchors the recursion at any event id (used to lazy-load a non-zero
-// iteration's subtree).
+// iteration's subtree). `after` is a keyset cursor on the outer
+// (depth, created_at, id) ordering — pass the last row of the previous
+// page to fetch the next slice.
 export async function getGraph(
   pool: Pool,
   opts: {
@@ -177,9 +206,10 @@ export async function getGraph(
     depth: number;
     limit: number;
     rootEventId?: string;
+    after?: GraphCursor;
   },
   capture?: Capture,
-): Promise<GraphRow[]> {
+): Promise<{ events: GraphRow[]; nextCursor: string | null }> {
   const anchorClause = opts.rootEventId
     ? `e.id = $5`
     : `e.parent_id IS NULL AND (e.iteration IS NULL OR e.iteration = 0)`;
@@ -191,6 +221,19 @@ export async function getGraph(
     opts.limit,
   ];
   if (opts.rootEventId) params.push(opts.rootEventId);
+
+  // Build the outer keyset predicate when an `after` cursor is supplied.
+  // Param order is intentional: $1..$4 are the standard args, $5 is
+  // rootEventId (if any), and the cursor takes the next three slots.
+  let cursorClause = '';
+  if (opts.after) {
+    params.push(opts.after.depth, opts.after.createdAt, opts.after.id);
+    const d = params.length - 2;
+    const t = params.length - 1;
+    const i = params.length;
+    cursorClause = `WHERE (g.depth, g.created_at, g.id)
+                       > ($${d}::int, $${t}::timestamptz, $${i}::uuid)`;
+  }
 
   const sql = `WITH RECURSIVE graph AS (
    SELECT e.id, e.parent_id, e.event_type, e.name, e.status, e.conclusion,
@@ -223,6 +266,7 @@ export async function getGraph(
              AND s.parent_id IS NOT DISTINCT FROM g.parent_id
         ) END AS iteration_count
    FROM graph g
+  ${cursorClause}
   ORDER BY g.depth, g.created_at, g.id
   LIMIT $4`;
   if (capture) {
@@ -231,5 +275,8 @@ export async function getGraph(
   }
 
   const { rows } = await pool.query<GraphRow>(sql, params);
-  return rows;
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    rows.length === opts.limit && last ? encodeGraphCursor(last) : null;
+  return { events: rows, nextCursor };
 }

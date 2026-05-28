@@ -6,7 +6,7 @@ import { EventTree } from '../components/EventTree';
 import { QueryInfo } from '../components/QueryInfo';
 import { Breadcrumbs } from '../components/Breadcrumbs';
 
-const GRAPH_LIMIT = 500;
+const PAGE_SIZE = 1000;
 
 function JsonPane({
   selected,
@@ -58,29 +58,30 @@ export function ExecutionGraphPage() {
   const [events, setEvents] = useState<GraphEvent[]>([]);
   const [detail, setDetail] = useState<ExecutionDetail | null>(null);
   const [depth, setDepth] = useState(10);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [queryMs, setQueryMs] = useState<number | null>(null);
   const [querySql, setQuerySql] = useState<string | null>(null);
   const [queryParams, setQueryParams] = useState<unknown[] | null>(null);
   const [selected, setSelected] = useState<GraphEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     if (!org || !executionId) return;
     setLoading(true);
     setError(null);
     Promise.all([
-      api.graph(org.org_id, executionId, { depth }),
+      api.graph(org.org_id, executionId, { depth, limit: PAGE_SIZE }),
       api.execution(org.org_id, executionId),
     ])
       .then(([graphRes, execRes]) => {
         setEvents(graphRes.events);
+        setNextCursor(graphRes.next_cursor);
         setQueryMs(graphRes.query_time_ms);
         setQuerySql(graphRes.query_sql);
         setQueryParams(graphRes.query_params);
         setDetail(execRes.execution);
-        // Land with the root selected so the JSON pane shows something
-        // immediately rather than the full-response dump.
         const root = graphRes.events.find((e) => e.parent_id === null);
         setSelected(root ?? graphRes.events[0] ?? null);
       })
@@ -88,9 +89,30 @@ export function ExecutionGraphPage() {
       .finally(() => setLoading(false));
   }, [org, executionId, depth]);
 
+  async function loadMore() {
+    if (!org || !executionId || !nextCursor) return;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const res = await api.graph(org.org_id, executionId, {
+        depth,
+        limit: PAGE_SIZE,
+        after: nextCursor,
+      });
+      setEvents((prev) => [...prev, ...res.events]);
+      setNextCursor(res.next_cursor);
+      setQueryMs(res.query_time_ms);
+      setQuerySql(res.query_sql);
+      setQueryParams(res.query_params);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
   if (!org) return <p className="text-slate-500">Pick an org to continue.</p>;
 
-  const truncated = events.length >= GRAPH_LIMIT;
   const shortId = executionId ? `${executionId.slice(0, 8)}…` : '';
 
   return (
@@ -150,16 +172,16 @@ export function ExecutionGraphPage() {
             />
             <div className="mt-3 flex items-center justify-between gap-2">
               <span className="text-xs text-slate-500">
-                {truncated
-                  ? `Showing ${events.length} (capped at ${GRAPH_LIMIT}). Bump depth to load more.`
-                  : `Showing all ${events.length} at depth ${depth}.`}
+                {nextCursor
+                  ? `Showing ${events.length} events. More available.`
+                  : `Showing all ${events.length} events.`}
               </span>
               <button
-                onClick={() => setDepth((d) => Math.min(50, d + 5))}
-                disabled={depth >= 50}
-                className="text-xs border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 rounded px-3 py-1.5 shadow-sm"
+                onClick={loadMore}
+                disabled={!nextCursor || loadingMore}
+                className="text-xs border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed rounded px-3 py-1.5 shadow-sm"
               >
-                Show more (depth +5)
+                {loadingMore ? 'Loading…' : `Show more (+${PAGE_SIZE})`}
               </button>
             </div>
           </div>

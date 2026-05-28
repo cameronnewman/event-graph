@@ -27,26 +27,88 @@ the indexes — and hit them through a small Express API or the bundled UI.
 - React 18 + Vite + Tailwind SPA in `web/`, served by Express from `web/dist/`
   in production, or via the Vite dev server (which proxies `/api/*` to Express).
 
-## Quickstart
+## Run it locally
+
+### Prerequisites
+
+- **Node 22+** (matches CI; older versions may work but aren't tested).
+- **Docker** running locally — Postgres is launched via `docker compose`, and
+  the test suite uses `@testcontainers/postgresql`.
+- `make` (already on macOS / most Linux). Windows users can read the
+  one-liners out of the `Makefile` and run them directly.
+
+### One-shot
 
 ```bash
 make start       # install + db up + seed + run API & Vite together
 ```
 
-Open <http://localhost:5173/> and click through workflows → executions →
-timeline graph.
+Then open <http://localhost:5173/> and click through workflows → executions →
+timeline graph. The first run takes ~30s while Postgres boots and the seed
+loads; subsequent runs are instant.
 
-Granular targets:
+### What's running where
+
+| Service     | Port  | URL / how                              |
+|-------------|------:|----------------------------------------|
+| Postgres    | 5432  | `docker compose exec postgres psql -U eventgraph` |
+| API         | 3000  | <http://localhost:3000/api/v1/healthz> |
+| Vite (SPA)  | 5173  | <http://localhost:5173/> (proxies `/api/*` to :3000) |
+
+Verify the API is up:
 
 ```bash
-make setup       # npm install (root + web)
-make db-up       # docker compose up -d postgres
-make seed        # dev-sized seed (override SEED_* on CLI)
-make api         # API on :3000 (watch mode)
-make web         # Vite dev server on :5173 (proxies /api -> :3000)
-make dev         # API + Vite together via concurrently
-make db-reset    # wipe Postgres volume and recreate
+curl -s http://localhost:3000/api/v1/healthz   # {"ok":true}
+curl -s http://localhost:3000/api/v1/orgs      # one entry once you've seeded
 ```
+
+### Step-by-step (instead of `make start`)
+
+Useful when you want one piece running on its own — e.g. only the API while
+you poke at it with `curl`:
+
+```bash
+make setup       # npm install in repo root + web/
+make db-up       # docker compose up -d postgres
+make seed        # dev-sized seed (override SEED_* on CLI; see "Seed knobs")
+make api         # API on :3000 (tsx watch mode)
+make web         # Vite dev server on :5173 (proxies /api -> :3000)
+make dev         # API + Vite together via concurrently (same as `make start` without seed)
+```
+
+### Stopping and resetting
+
+```bash
+make db-down     # stop Postgres (keeps data volume)
+make db-reset    # wipe Postgres volume and recreate (use after editing db/schema.sql)
+make clean       # remove node_modules and web/dist
+```
+
+The Express dev server hot-reloads on save (`tsx watch`). The SPA hot-reloads
+via Vite. Editing `db/schema.sql` requires `make db-reset` — the schema is
+only applied on first volume creation.
+
+### Production-style local build
+
+To exercise the same path CI ships (Express serving the built SPA on a single
+port):
+
+```bash
+npm run build --prefix web    # writes web/dist/
+make api                      # Express now serves web/dist/ at http://localhost:3000/
+```
+
+### Troubleshooting
+
+- **`docker: Cannot connect to the Docker daemon`** — start Docker Desktop (or
+  your daemon) and re-run.
+- **Port 5432/3000/5173 already in use** — stop the conflicting service or
+  set `PORT=<n>` for the API (`PORT=3001 make api`). The Vite dev port lives
+  in `web/vite.config.ts`.
+- **`make seed` hangs** — Postgres may still be initialising on first boot;
+  `make db-up && make db-wait` waits up to 30s for readiness, then retry.
+- **Schema changes don't show up** — `make db-reset` (the volume only loads
+  `db/schema.sql` on first creation).
 
 ## API
 
