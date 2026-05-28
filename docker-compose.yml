@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: event-graph-postgres
+    environment:
+      POSTGRES_USER: eventgraph
+      POSTGRES_PASSWORD: eventgraph
+      POSTGRES_DB: eventgraph
+    ports:
+      - "5432:5432"
+    volumes:
+      - eventgraph-data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eventgraph -d eventgraph"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  eventgraph-data:
