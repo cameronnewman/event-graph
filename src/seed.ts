@@ -1,53 +1,98 @@
-import { Readable, Writable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import { uuidv7 } from 'uuidv7';
-import { from as copyFrom } from 'pg-copy-streams';
-import { faker } from '@faker-js/faker';
-import { pool } from './db.js';
+import { Readable, Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { uuidv7 } from "uuidv7";
+import { from as copyFrom } from "pg-copy-streams";
+import { faker } from "@faker-js/faker";
+import { pool } from "./db.js";
 
 // Defaults sized for a useful dev/demo seed (~minutes-to-seconds, gigabytes-down).
 // Override via env for a stress shape, e.g.
 //   SEED_EXECUTIONS=50000 SEED_MIN_EVENTS=5000 SEED_MAX_EVENTS=20000 npm run seed
-const NUM_EXECUTIONS = Number(process.env.SEED_EXECUTIONS ?? 500);
+const NUM_EXECUTIONS = Number(process.env.SEED_EXECUTIONS ?? 800);
 const NUM_WORKFLOWS = Number(process.env.SEED_WORKFLOWS ?? 20);
-const MIN_EVENTS = Number(process.env.SEED_MIN_EVENTS ?? 1_200);
-const MAX_EVENTS = Number(process.env.SEED_MAX_EVENTS ?? 5_000);
-const NESTING_DEPTH = Number(process.env.SEED_NESTING_DEPTH ?? 3);
-const EXTRA_TOP_LOOPS = Number(process.env.SEED_EXTRA_TOP_LOOPS ?? 2);
+const MIN_EVENTS = Number(process.env.SEED_MIN_EVENTS ?? 2_200);
+const MAX_EVENTS = Number(process.env.SEED_MAX_EVENTS ?? 9_000);
+const NESTING_DEPTH = Number(process.env.SEED_NESTING_DEPTH ?? 5);
+const EXTRA_TOP_LOOPS = Number(process.env.SEED_EXTRA_TOP_LOOPS ?? 4);
 
 const WORKFLOW_NAMES = [
-  'Order processing pipeline',
-  'User signup flow',
-  'Invoice reconciliation',
-  'Daily report generation',
-  'Customer support triage',
-  'Payment refund workflow',
-  'Webhook delivery retry',
-  'Document OCR pipeline',
-  'Subscription renewal',
-  'Email campaign blast',
-  'Data export job',
-  'Inventory sync',
-  'Fraud review queue',
-  'Account onboarding',
-  'Lead enrichment',
-  'Contract approval flow',
-  'Shipping label generation',
-  'Tax calculation batch',
+  "Order processing pipeline",
+  "User signup flow",
+  "Invoice reconciliation",
+  "Daily report generation",
+  "Customer support triage",
+  "Payment refund workflow",
+  "Webhook delivery retry",
+  "Document OCR pipeline",
+  "Subscription renewal",
+  "Email campaign blast",
+  "Data export job",
+  "Inventory sync",
+  "Fraud review queue",
+  "Account onboarding",
+  "Lead enrichment",
+  "Contract approval flow",
+  "Shipping label generation",
+  "Tax calculation batch",
 ];
 
 const VERBS = [
-  'Click', 'Open', 'Submit', 'Load', 'Fetch', 'Save', 'Delete', 'Update',
-  'Send', 'Render', 'Validate', 'Process', 'Sync', 'Upload', 'Download',
-  'Refresh', 'Cancel', 'Approve', 'Retry', 'Archive',
+  "Click",
+  "Open",
+  "Submit",
+  "Load",
+  "Fetch",
+  "Save",
+  "Delete",
+  "Update",
+  "Send",
+  "Render",
+  "Validate",
+  "Process",
+  "Sync",
+  "Upload",
+  "Download",
+  "Refresh",
+  "Cancel",
+  "Approve",
+  "Retry",
+  "Archive",
 ];
 const NOUNS = [
-  'button', 'form', 'page', 'modal', 'profile', 'order', 'invoice', 'report',
-  'message', 'token', 'session', 'dashboard', 'comment', 'review', 'document',
-  'webhook', 'job', 'request', 'queue', 'record',
+  "button",
+  "form",
+  "page",
+  "modal",
+  "profile",
+  "order",
+  "invoice",
+  "report",
+  "message",
+  "token",
+  "session",
+  "dashboard",
+  "comment",
+  "review",
+  "document",
+  "webhook",
+  "job",
+  "request",
+  "queue",
+  "record",
 ];
 const SUFFIXES = [
-  'A', 'B', 'C', 'X', 'Y', 'Z', '#1', '#2', '#3', '#42', '#99', '#101',
+  "A",
+  "B",
+  "C",
+  "X",
+  "Y",
+  "Z",
+  "#1",
+  "#2",
+  "#3",
+  "#42",
+  "#99",
+  "#101",
 ];
 
 const randInt = (min: number, max: number) =>
@@ -69,28 +114,135 @@ type FieldDef = {
 
 const FIELD_DEFS: FieldDef[] = [
   // PII — redacted by default.
-  { name: 'credit_card_number', data_type: 'string', visible: false, value: () => faker.finance.creditCardNumber() },
-  { name: 'cvv', data_type: 'string', visible: false, value: () => faker.finance.creditCardCVV() },
-  { name: 'ssn', data_type: 'string', visible: false, value: () => `${faker.number.int({ min: 100, max: 999 })}-${faker.number.int({ min: 10, max: 99 })}-${faker.number.int({ min: 1000, max: 9999 })}` },
-  { name: 'phone_number', data_type: 'string', visible: false, value: () => faker.phone.number() },
-  { name: 'date_of_birth', data_type: 'date', visible: false, value: () => faker.date.birthdate().toISOString().slice(0, 10) },
-  { name: 'street_address', data_type: 'string', visible: false, value: () => faker.location.streetAddress() },
-  { name: 'iban', data_type: 'string', visible: false, value: () => faker.finance.iban() },
-  { name: 'routing_number', data_type: 'string', visible: false, value: () => faker.finance.routingNumber() },
-  { name: 'api_key', data_type: 'string', visible: false, value: () => faker.string.alphanumeric({ length: 32 }) },
-  { name: 'session_token', data_type: 'string', visible: false, value: () => faker.string.alphanumeric({ length: 24 }) },
-  { name: 'email', data_type: 'string', visible: false, value: () => faker.internet.email() },
-  { name: 'full_name', data_type: 'string', visible: false, value: () => faker.person.fullName() },
-  { name: 'password_hash', data_type: 'string', visible: false, value: () => faker.string.hexadecimal({ length: 64, prefix: '' }) },
+  {
+    name: "credit_card_number",
+    data_type: "string",
+    visible: false,
+    value: () => faker.finance.creditCardNumber(),
+  },
+  {
+    name: "cvv",
+    data_type: "string",
+    visible: false,
+    value: () => faker.finance.creditCardCVV(),
+  },
+  {
+    name: "ssn",
+    data_type: "string",
+    visible: false,
+    value: () =>
+      `${faker.number.int({ min: 100, max: 999 })}-${faker.number.int({ min: 10, max: 99 })}-${faker.number.int({ min: 1000, max: 9999 })}`,
+  },
+  {
+    name: "phone_number",
+    data_type: "string",
+    visible: false,
+    value: () => faker.phone.number(),
+  },
+  {
+    name: "date_of_birth",
+    data_type: "date",
+    visible: false,
+    value: () => faker.date.birthdate().toISOString().slice(0, 10),
+  },
+  {
+    name: "street_address",
+    data_type: "string",
+    visible: false,
+    value: () => faker.location.streetAddress(),
+  },
+  {
+    name: "iban",
+    data_type: "string",
+    visible: false,
+    value: () => faker.finance.iban(),
+  },
+  {
+    name: "routing_number",
+    data_type: "string",
+    visible: false,
+    value: () => faker.finance.routingNumber(),
+  },
+  {
+    name: "api_key",
+    data_type: "string",
+    visible: false,
+    value: () => faker.string.alphanumeric({ length: 32 }),
+  },
+  {
+    name: "session_token",
+    data_type: "string",
+    visible: false,
+    value: () => faker.string.alphanumeric({ length: 24 }),
+  },
+  {
+    name: "email",
+    data_type: "string",
+    visible: false,
+    value: () => faker.internet.email(),
+  },
+  {
+    name: "full_name",
+    data_type: "string",
+    visible: false,
+    value: () => faker.person.fullName(),
+  },
+  {
+    name: "password_hash",
+    data_type: "string",
+    visible: false,
+    value: () => faker.string.hexadecimal({ length: 64, prefix: "" }),
+  },
   // Operational / safe-to-show.
-  { name: 'order_id', data_type: 'string', visible: true, value: () => `ORD-${faker.string.numeric(6)}` },
-  { name: 'amount_cents', data_type: 'int', visible: true, value: () => String(faker.number.int({ min: 100, max: 1_000_000 })) },
-  { name: 'currency', data_type: 'string', visible: true, value: () => faker.finance.currencyCode() },
-  { name: 'status_code', data_type: 'int', visible: true, value: () => String(pick([200, 201, 202, 204, 400, 404, 500])) },
-  { name: 'region', data_type: 'string', visible: true, value: () => pick(['us-east-1', 'us-west-2', 'eu-west-1', 'ap-southeast-2']) },
-  { name: 'attempt', data_type: 'int', visible: true, value: () => String(faker.number.int({ min: 1, max: 5 })) },
-  { name: 'duration_ms', data_type: 'int', visible: true, value: () => String(faker.number.int({ min: 5, max: 5_000 })) },
-  { name: 'queue', data_type: 'string', visible: true, value: () => pick(['default', 'priority', 'batch', 'webhooks']) },
+  {
+    name: "order_id",
+    data_type: "string",
+    visible: true,
+    value: () => `ORD-${faker.string.numeric(6)}`,
+  },
+  {
+    name: "amount_cents",
+    data_type: "int",
+    visible: true,
+    value: () => String(faker.number.int({ min: 100, max: 1_000_000 })),
+  },
+  {
+    name: "currency",
+    data_type: "string",
+    visible: true,
+    value: () => faker.finance.currencyCode(),
+  },
+  {
+    name: "status_code",
+    data_type: "int",
+    visible: true,
+    value: () => String(pick([200, 201, 202, 204, 400, 404, 500])),
+  },
+  {
+    name: "region",
+    data_type: "string",
+    visible: true,
+    value: () =>
+      pick(["us-east-1", "us-west-2", "eu-west-1", "ap-southeast-2"]),
+  },
+  {
+    name: "attempt",
+    data_type: "int",
+    visible: true,
+    value: () => String(faker.number.int({ min: 1, max: 5 })),
+  },
+  {
+    name: "duration_ms",
+    data_type: "int",
+    visible: true,
+    value: () => String(faker.number.int({ min: 5, max: 5_000 })),
+  },
+  {
+    name: "queue",
+    data_type: "string",
+    visible: true,
+    value: () => pick(["default", "priority", "batch", "webhooks"]),
+  },
 ];
 
 function buildPayload(noteName: string): {
@@ -98,13 +250,13 @@ function buildPayload(noteName: string): {
 } {
   // Always include the human-readable name as a visible field. Then 0–9 more
   // random fields, no duplicates. Some PII, some operational.
-  const used = new Set<string>(['note']);
+  const used = new Set<string>(["note"]);
   const fields: Array<Record<string, unknown>> = [
     {
-      id: 'note',
-      name: 'note',
-      data_type: 'string',
-      label: 'visible',
+      id: "note",
+      name: "note",
+      data_type: "string",
+      label: "visible",
       value: noteName,
     },
   ];
@@ -127,7 +279,7 @@ function buildPayload(noteName: string): {
       data_type: def.data_type,
       value: def.value(),
     };
-    if (def.visible) field.label = 'visible';
+    if (def.visible) field.label = "visible";
     fields.push(field);
   }
   return { fields };
@@ -153,29 +305,26 @@ type EventOut = {
 // with different payload data. That's how a real workflow looks: same code
 // running over different inputs.
 type Step =
-  | { kind: 'task'; name: string }
-  | { kind: 'loop'; loopId: string; name: string; iters: number; body: Step[] };
+  | { kind: "task"; name: string }
+  | { kind: "loop"; loopId: string; name: string; iters: number; body: Step[] };
 
 function planBody(depth: number, target: number): Step[] {
   if (depth >= NESTING_DEPTH || target < 6) {
     const n = Math.max(1, Math.min(target, 6));
-    return Array.from(
-      { length: n },
-      () => ({ kind: 'task' as const, name: taskName() }),
-    );
+    return Array.from({ length: n }, () => ({
+      kind: "task" as const,
+      name: taskName(),
+    }));
   }
   const taskN = randInt(2, 5);
   const iters = randInt(3, 5);
-  const perIterTarget = Math.max(
-    1,
-    Math.floor((target - taskN) / iters) - 1,
-  );
+  const perIterTarget = Math.max(1, Math.floor((target - taskN) / iters) - 1);
   const body: Step[] = [];
   for (let i = 0; i < taskN; i++) {
-    body.push({ kind: 'task', name: taskName() });
+    body.push({ kind: "task", name: taskName() });
   }
   body.push({
-    kind: 'loop',
+    kind: "loop",
     loopId: `nested-loop-${depth + 1}`,
     name: loopName(),
     iters,
@@ -187,12 +336,12 @@ function planBody(depth: number, target: number): Step[] {
 function planExtraLoop(idx: number, target: number): Step {
   const iters = randInt(3, 5);
   const taskN = Math.max(2, Math.floor((target - 1) / iters));
-  const body: Step[] = Array.from(
-    { length: taskN },
-    () => ({ kind: 'task' as const, name: taskName() }),
-  );
+  const body: Step[] = Array.from({ length: taskN }, () => ({
+    kind: "task" as const,
+    name: taskName(),
+  }));
   return {
-    kind: 'loop',
+    kind: "loop",
     loopId: `top-loop-${idx}`,
     name: loopName(),
     iters,
@@ -216,7 +365,7 @@ function* generateExecution(
     loopId?: string,
     iteration?: number,
   ): EventOut => {
-    const conclusion = Math.random() < 0.05 ? 'failed' : 'success';
+    const conclusion = Math.random() < 0.05 ? "failed" : "success";
     const metadata: Record<string, unknown> = {};
     if (loopId !== undefined) {
       metadata.loop_id = loopId;
@@ -233,7 +382,7 @@ function* generateExecution(
       parent_id: parentId,
       event_type: eventType,
       name,
-      status: 'completed',
+      status: "completed",
       conclusion,
       payload: JSON.stringify(payload),
       metadata: JSON.stringify(metadata),
@@ -241,18 +390,15 @@ function* generateExecution(
     };
   };
 
-  function* emit(
-    steps: Step[],
-    parentId: string,
-  ): Generator<EventOut> {
+  function* emit(steps: Step[], parentId: string): Generator<EventOut> {
     for (const s of steps) {
-      if (s.kind === 'task') {
-        yield makeEvent(parentId, 'task.run', s.name);
+      if (s.kind === "task") {
+        yield makeEvent(parentId, "task.run", s.name);
       } else {
         for (let i = 0; i < s.iters; i++) {
           const iter = makeEvent(
             parentId,
-            'loop.iteration',
+            "loop.iteration",
             s.name,
             s.loopId,
             i,
@@ -264,16 +410,17 @@ function* generateExecution(
     }
   }
 
-  const root = makeEvent(null, 'execution.start', 'Execution start');
+  const root = makeEvent(null, "execution.start", "Execution start");
   yield root;
 
   // Split the target between the deeply nested chain (~85%) and the
   // independent extra top-level loops.
   const mainBudget = Math.floor(target * 0.85);
   const extraTotal = Math.max(0, target - mainBudget);
-  const extraPer = EXTRA_TOP_LOOPS > 0
-    ? Math.max(6, Math.floor(extraTotal / EXTRA_TOP_LOOPS))
-    : 0;
+  const extraPer =
+    EXTRA_TOP_LOOPS > 0
+      ? Math.max(6, Math.floor(extraTotal / EXTRA_TOP_LOOPS))
+      : 0;
 
   const topBody = planBody(0, mainBudget);
   yield* emit(topBody, root.id);
@@ -286,7 +433,7 @@ function* generateExecution(
 // CSV-escape a single field. NULL is rendered as the literal sentinel \N
 // (matched by COPY ... WITH (FORMAT csv, NULL '\N')).
 function csv(v: string | null): string {
-  if (v === null) return '\\N';
+  if (v === null) return "\\N";
   if (/[",\n\r]/.test(v)) {
     return '"' + v.replace(/"/g, '""') + '"';
   }
@@ -308,7 +455,7 @@ function eventToRow(e: EventOut): string {
       csv(e.payload),
       csv(e.metadata),
       csv(e.created_at),
-    ].join(',') + '\n'
+    ].join(",") + "\n"
   );
 }
 
@@ -331,7 +478,7 @@ async function* allRows(
       executionId,
       startEpoch + i * 10_000,
     )) {
-      if (e.event_type === 'loop.iteration') {
+      if (e.event_type === "loop.iteration") {
         const md = JSON.parse(e.metadata) as {
           loop_id?: string;
           iteration?: number;
@@ -390,7 +537,7 @@ async function copyEvents(
     );
     const source = Readable.from(allRows(orgId, workflowIds, samples), {
       objectMode: false,
-      encoding: 'utf8',
+      encoding: "utf8",
     });
     await pipeline(source, copyStream as unknown as Writable);
   } finally {
@@ -406,11 +553,11 @@ async function seed() {
   const orgId = uuidv7();
   const orgName = faker.company.name();
 
-  await pool.query('TRUNCATE events, executions, workflows, orgs');
-  await pool.query(
-    `INSERT INTO orgs (org_id, name) VALUES ($1, $2)`,
-    [orgId, orgName],
-  );
+  await pool.query("TRUNCATE events, executions, workflows, orgs");
+  await pool.query(`INSERT INTO orgs (org_id, name) VALUES ($1, $2)`, [
+    orgId,
+    orgName,
+  ]);
 
   // Pre-build the workflow pool. Cycle through WORKFLOW_NAMES if NUM_WORKFLOWS
   // exceeds it, suffixing to keep names distinct.
@@ -473,7 +620,7 @@ async function seed() {
   console.log(`  loop iter max   = ${samples.loopIterMax}`);
 
   const base = `http://localhost:${process.env.PORT ?? 3000}`;
-  console.log('\nTry:');
+  console.log("\nTry:");
   console.log(`  open ${base}/`);
   console.log(`  curl "${base}/api/v1/orgs"`);
   console.log(`  curl -H "x-org-id: ${orgId}" "${base}/api/v1/workflows"`);
