@@ -32,38 +32,3 @@ export type ExecutionSummary = {
   completed_at: Date | null;
   event_count: number | null;
 };
-
-export type EventRow = {
-  id: string;
-  parent_id: string | null;
-  event_type: string;
-  name: string;
-  status: string;
-  conclusion: string | null;
-  payload: unknown;
-  metadata: unknown;
-  created_at: Date;
-};
-
-export type GraphEventRow = EventRow & {
-  depth: number;
-  iteration_count: number | null;
-};
-
-// Loop sibling response — iteration/loop_id live in metadata (no top-level
-// duplicates, since the events table generates them from metadata anyway).
-export type LoopSiblingRow = EventRow;
-
-export type Cursor = { createdAt: string; id: string };
-
-// Returned alongside store results so routes can echo the SQL + params back to
-// the SPA. Routes ship this as `query_sql` / `query_params` for the SQL modal.
-export type QueryDescriptor = {
-  sql: string;
-  params: unknown[];
-};
-
-export type StoreResult<T> = {
-  rows: T[];
-  query: QueryDescriptor;
-};

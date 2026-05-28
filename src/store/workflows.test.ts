@@ -20,7 +20,7 @@ beforeEach(async () => {
 describe('listWorkflows', () => {
   it('returns workflows for the org with rollups', async () => {
     const f = await seedFixture(db);
-    const { rows } = await listWorkflows(db, f.orgId);
+    const rows = await listWorkflows(db, f.orgId);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -33,8 +33,7 @@ describe('listWorkflows', () => {
 
   it('does not leak workflows from another org', async () => {
     const f = await seedFixture(db);
-    const { rows } = await listWorkflows(db, f.otherOrgId);
-    expect(rows).toEqual([]);
+    expect(await listWorkflows(db, f.otherOrgId)).toEqual([]);
   });
 });
 
@@ -53,15 +52,10 @@ describe('listExecutionsForWorkflow', () => {
       [newer, f.orgId, f.workflowId],
     );
 
-    const { rows } = await listExecutionsForWorkflow(
-      db,
-      f.orgId,
-      f.workflowId,
-      10,
-    );
+    const rows = await listExecutionsForWorkflow(db, f.orgId, f.workflowId, 10);
     expect(rows.map((r) => r.execution_id)).toEqual([newer, f.executionId]);
 
-    const { rows: limited } = await listExecutionsForWorkflow(
+    const limited = await listExecutionsForWorkflow(
       db,
       f.orgId,
       f.workflowId,
@@ -73,12 +67,8 @@ describe('listExecutionsForWorkflow', () => {
 
   it('does not leak executions from another org', async () => {
     const f = await seedFixture(db);
-    const { rows } = await listExecutionsForWorkflow(
-      db,
-      f.otherOrgId,
-      f.workflowId,
-      10,
-    );
-    expect(rows).toEqual([]);
+    expect(
+      await listExecutionsForWorkflow(db, f.otherOrgId, f.workflowId, 10),
+    ).toEqual([]);
   });
 });

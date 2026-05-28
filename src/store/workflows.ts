@@ -1,9 +1,9 @@
 import type {
   ExecutionSummary,
   Queryable,
-  StoreResult,
   WorkflowSummary,
 } from './types.js';
+import type { Capture } from './events.js';
 
 const LIST_WORKFLOWS_SQL = `SELECT w.workflow_id, w.name, w.created_at,
        COUNT(e.execution_id)::int AS execution_count,
@@ -18,10 +18,15 @@ const LIST_WORKFLOWS_SQL = `SELECT w.workflow_id, w.name, w.created_at,
 export async function listWorkflows(
   db: Queryable,
   orgId: string,
-): Promise<StoreResult<WorkflowSummary>> {
-  const params = [orgId];
+  capture?: Capture,
+): Promise<WorkflowSummary[]> {
+  const params: unknown[] = [orgId];
+  if (capture) {
+    capture.sql = LIST_WORKFLOWS_SQL;
+    capture.params = params;
+  }
   const { rows } = await db.query<WorkflowSummary>(LIST_WORKFLOWS_SQL, params);
-  return { rows, query: { sql: LIST_WORKFLOWS_SQL, params } };
+  return rows;
 }
 
 const LIST_EXECUTIONS_SQL = `SELECT execution_id, status, conclusion,
@@ -31,6 +36,22 @@ const LIST_EXECUTIONS_SQL = `SELECT execution_id, status, conclusion,
    AND workflow_id = $2
  ORDER BY started_at DESC
  LIMIT $3`;
+
+export async function listExecutionsForWorkflow(
+  db: Queryable,
+  orgId: string,
+  workflowId: string,
+  limit: number,
+  capture?: Capture,
+): Promise<ExecutionSummary[]> {
+  const params: unknown[] = [orgId, workflowId, limit];
+  if (capture) {
+    capture.sql = LIST_EXECUTIONS_SQL;
+    capture.params = params;
+  }
+  const { rows } = await db.query<ExecutionSummary>(LIST_EXECUTIONS_SQL, params);
+  return rows;
+}
 
 const GET_EXECUTION_SQL = `SELECT e.execution_id, e.workflow_id, e.status, e.conclusion,
        e.started_at, e.completed_at, e.event_count,
@@ -56,25 +77,13 @@ export async function getExecution(
   db: Queryable,
   orgId: string,
   executionId: string,
-): Promise<{
-  row: ExecutionDetail | null;
-  query: { sql: string; params: unknown[] };
-}> {
+  capture?: Capture,
+): Promise<ExecutionDetail | null> {
   const params: unknown[] = [orgId, executionId];
+  if (capture) {
+    capture.sql = GET_EXECUTION_SQL;
+    capture.params = params;
+  }
   const { rows } = await db.query<ExecutionDetail>(GET_EXECUTION_SQL, params);
-  return {
-    row: rows[0] ?? null,
-    query: { sql: GET_EXECUTION_SQL, params },
-  };
-}
-
-export async function listExecutionsForWorkflow(
-  db: Queryable,
-  orgId: string,
-  workflowId: string,
-  limit: number,
-): Promise<StoreResult<ExecutionSummary>> {
-  const params: unknown[] = [orgId, workflowId, limit];
-  const { rows } = await db.query<ExecutionSummary>(LIST_EXECUTIONS_SQL, params);
-  return { rows, query: { sql: LIST_EXECUTIONS_SQL, params } };
+  return rows[0] ?? null;
 }

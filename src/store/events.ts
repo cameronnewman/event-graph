@@ -1,190 +1,235 @@
-import type {
-  Cursor,
-  EventRow,
-  GraphEventRow,
-  LoopSiblingRow,
-  Queryable,
-  StoreResult,
-} from './types.js';
+import type { Pool } from 'pg';
 
-const LIST_EXECUTION_TIMELINE_SQL = `SELECT id, parent_id, event_type, name, status, conclusion,
-       redact_payload(payload) AS payload, metadata, created_at
-  FROM events
- WHERE org_id = $1
-   AND execution_id = $2
-   AND (iteration IS NULL OR iteration = 0)
- ORDER BY created_at, id
- LIMIT $3`;
+export type EventRow = {
+  id: string;
+  parent_id: string | null;
+  event_type: string;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  payload: unknown;
+  metadata: Record<string, unknown>;
+  created_at: Date;
+};
 
-// Q1: execution timeline, loops collapsed to first iteration.
-export async function listExecutionTimeline(
-  db: Queryable,
-  orgId: string,
-  executionId: string,
-  limit: number,
-): Promise<StoreResult<EventRow>> {
-  const params: unknown[] = [orgId, executionId, limit];
-  const { rows } = await db.query<EventRow>(LIST_EXECUTION_TIMELINE_SQL, params);
-  return { rows, query: { sql: LIST_EXECUTION_TIMELINE_SQL, params } };
+export type GraphRow = EventRow & {
+  depth: number;
+  iteration_count: number | null;
+};
+
+export type IterationEventRow = EventRow & {
+  iteration: number;
+  loop_id: string;
+};
+
+export type Cursor = { createdAt: string; id: string };
+
+export type IterationLookup =
+  | { kind: 'ok'; event: IterationEventRow }
+  | { kind: 'event_not_found' }
+  | { kind: 'not_a_loop' }
+  | { kind: 'iteration_not_found' };
+
+// Optional capture object passed by routes that want to echo the executed SQL
+// + params back to the SPA (powers the "click query time → SQL modal" UI).
+// Tests can omit it. Functions that issue multiple statements capture the
+// last/headline one — anchor lookups etc. are plumbing.
+export type Capture = { sql?: string; params?: unknown[] };
+
+export function parseCursor(s: string): Cursor | null {
+  const idx = s.lastIndexOf('|');
+  if (idx === -1) return null;
+  return { createdAt: s.slice(0, idx), id: s.slice(idx + 1) };
 }
 
-// Q2: paginate children under a parent, loops collapsed, keyset cursor.
-export async function listChildren(
-  db: Queryable,
-  args: {
+export function encodeCursor(row: { created_at: Date; id: string }): string {
+  return `${row.created_at.toISOString()}|${row.id}`;
+}
+
+// Q1
+export async function getTimeline(
+  pool: Pool,
+  opts: { orgId: string; executionId: string; limit: number },
+  capture?: Capture,
+): Promise<EventRow[]> {
+  const sql = `SELECT id, parent_id, event_type, name, status, conclusion,
+        redact_payload(payload) AS payload, metadata, created_at
+   FROM events
+  WHERE org_id = $1
+    AND execution_id = $2
+    AND (iteration IS NULL OR iteration = 0)
+  ORDER BY created_at, id
+  LIMIT $3`;
+  const params: unknown[] = [opts.orgId, opts.executionId, opts.limit];
+  if (capture) {
+    capture.sql = sql;
+    capture.params = params;
+  }
+  const { rows } = await pool.query<EventRow>(sql, params);
+  return rows;
+}
+
+// Q2
+export async function getChildren(
+  pool: Pool,
+  opts: {
     orgId: string;
     executionId: string;
     parentId: string;
+    cursor: Cursor | null;
     limit: number;
-    cursor?: Cursor;
   },
-): Promise<StoreResult<EventRow>> {
-  const params: unknown[] = [args.orgId, args.executionId, args.parentId];
+  capture?: Capture,
+): Promise<{ events: EventRow[]; nextCursor: string | null }> {
+  const params: unknown[] = [opts.orgId, opts.executionId, opts.parentId];
   let cursorClause = '';
-  if (args.cursor) {
-    params.push(args.cursor.createdAt, args.cursor.id);
+  if (opts.cursor) {
+    params.push(opts.cursor.createdAt, opts.cursor.id);
     cursorClause = `AND (created_at, id) > ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
-  params.push(args.limit);
+  params.push(opts.limit);
 
   const sql = `SELECT id, parent_id, event_type, name, status, conclusion,
-       redact_payload(payload) AS payload, metadata, created_at
-  FROM events
- WHERE org_id = $1
-   AND execution_id = $2
-   AND parent_id = $3
-   AND (iteration IS NULL OR iteration = 0)
-   ${cursorClause}
- ORDER BY created_at, id
- LIMIT $${params.length}`;
+        redact_payload(payload) AS payload, metadata, created_at
+   FROM events
+  WHERE org_id = $1
+    AND execution_id = $2
+    AND parent_id = $3
+    AND (iteration IS NULL OR iteration = 0)
+    ${cursorClause}
+  ORDER BY created_at, id
+  LIMIT $${params.length}`;
+  if (capture) {
+    capture.sql = sql;
+    capture.params = params;
+  }
 
-  const { rows } = await db.query<EventRow>(sql, params);
-  return { rows, query: { sql, params } };
+  const { rows } = await pool.query<EventRow>(sql, params);
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    rows.length === opts.limit && last ? encodeCursor(last) : null;
+  return { events: rows, nextCursor };
 }
 
-const GET_EVENT_ANCHOR_SQL = `SELECT parent_id, loop_id
-  FROM events
- WHERE id = $1 AND org_id = $2 AND execution_id = $3`;
-
-// Q3a: fetch a single event's loop anchor (parent_id + loop_id), scoped to org.
-export async function getEventAnchor(
-  db: Queryable,
-  orgId: string,
-  executionId: string,
-  eventId: string,
-): Promise<{
-  row: { parent_id: string | null; loop_id: string | null } | null;
-  query: { sql: string; params: unknown[] };
-}> {
-  const params: unknown[] = [eventId, orgId, executionId];
-  const { rows } = await db.query<{
-    parent_id: string | null;
-    loop_id: string | null;
-  }>(GET_EVENT_ANCHOR_SQL, params);
-  return {
-    row: rows[0] ?? null,
-    query: { sql: GET_EVENT_ANCHOR_SQL, params },
-  };
-}
-
-const GET_LOOP_SIBLING_SQL = `SELECT id, parent_id, event_type, name, status, conclusion,
-       redact_payload(payload) AS payload, metadata, created_at
-  FROM events
- WHERE org_id = $1
-   AND execution_id = $2
-   AND parent_id IS NOT DISTINCT FROM $3::uuid
-   AND loop_id = $4
-   AND iteration = $5`;
-
-// Q3b: switch to a specific loop sibling by iteration index.
-export async function getLoopSibling(
-  db: Queryable,
-  args: {
+// Q3 — combined anchor lookup + sibling fetch, tagged union for the route to
+// translate to HTTP status codes.
+export async function getIterationSibling(
+  pool: Pool,
+  opts: {
     orgId: string;
     executionId: string;
-    parentId: string | null;
-    loopId: string;
+    eventId: string;
     iteration: number;
   },
-): Promise<{
-  row: LoopSiblingRow | null;
-  query: { sql: string; params: unknown[] };
-}> {
-  const params: unknown[] = [
-    args.orgId,
-    args.executionId,
-    args.parentId,
-    args.loopId,
-    args.iteration,
+  capture?: Capture,
+): Promise<IterationLookup> {
+  const { rows: anchorRows } = await pool.query<{
+    parent_id: string | null;
+    loop_id: string | null;
+  }>(
+    `SELECT parent_id, loop_id
+       FROM events
+      WHERE id = $1 AND org_id = $2 AND execution_id = $3`,
+    [opts.eventId, opts.orgId, opts.executionId],
+  );
+  if (anchorRows.length === 0) return { kind: 'event_not_found' };
+  const anchor = anchorRows[0]!;
+  if (anchor.loop_id === null) return { kind: 'not_a_loop' };
+
+  const siblingSql = `SELECT id, parent_id, event_type, name, status, conclusion,
+        redact_payload(payload) AS payload, metadata, created_at,
+        iteration, loop_id
+   FROM events
+  WHERE org_id = $1
+    AND execution_id = $2
+    AND parent_id IS NOT DISTINCT FROM $3::uuid
+    AND loop_id = $4
+    AND iteration = $5`;
+  const siblingParams: unknown[] = [
+    opts.orgId,
+    opts.executionId,
+    anchor.parent_id,
+    anchor.loop_id,
+    opts.iteration,
   ];
-  const { rows } = await db.query<LoopSiblingRow>(GET_LOOP_SIBLING_SQL, params);
-  return {
-    row: rows[0] ?? null,
-    query: { sql: GET_LOOP_SIBLING_SQL, params },
-  };
+  if (capture) {
+    capture.sql = siblingSql;
+    capture.params = siblingParams;
+  }
+  const { rows: siblingRows } = await pool.query<IterationEventRow>(
+    siblingSql,
+    siblingParams,
+  );
+  if (siblingRows.length === 0) return { kind: 'iteration_not_found' };
+  return { kind: 'ok', event: siblingRows[0]! };
 }
 
-// Query A: recursive collapsed graph (loops folded to iter=0), depth-bounded,
-// redacted. iteration_count is attached to every loop event so callers can
-// render an iteration switcher without a second round trip.
-// When rootEventId is set, the recursion is anchored at that event instead of
-// the execution roots — used to lazy-load a subtree at a non-zero iteration.
-export async function getExecutionGraph(
-  db: Queryable,
-  args: {
+// Query A — recursive collapsed graph, depth-bounded, redacted.
+// iteration_count is attached to every loop event so the SPA can render
+// a "switch iteration" dropdown without a second round trip. rootEventId
+// re-anchors the recursion at any event id (used to lazy-load a non-zero
+// iteration's subtree).
+export async function getGraph(
+  pool: Pool,
+  opts: {
     orgId: string;
     executionId: string;
     depth: number;
     limit: number;
     rootEventId?: string;
   },
-): Promise<StoreResult<GraphEventRow>> {
-  const anchorClause = args.rootEventId
+  capture?: Capture,
+): Promise<GraphRow[]> {
+  const anchorClause = opts.rootEventId
     ? `e.id = $5`
     : `e.parent_id IS NULL AND (e.iteration IS NULL OR e.iteration = 0)`;
 
   const params: unknown[] = [
-    args.orgId,
-    args.executionId,
-    args.depth,
-    args.limit,
+    opts.orgId,
+    opts.executionId,
+    opts.depth,
+    opts.limit,
   ];
-  if (args.rootEventId) params.push(args.rootEventId);
+  if (opts.rootEventId) params.push(opts.rootEventId);
 
   const sql = `WITH RECURSIVE graph AS (
-  SELECT e.id, e.parent_id, e.event_type, e.name, e.status, e.conclusion,
-         e.payload, e.metadata, e.loop_id, e.iteration,
-         e.created_at, 1 AS depth
-    FROM events e
-   WHERE e.org_id = $1
-     AND e.execution_id = $2
-     AND ${anchorClause}
-  UNION ALL
-  SELECT c.id, c.parent_id, c.event_type, c.name, c.status, c.conclusion,
-         c.payload, c.metadata, c.loop_id, c.iteration,
-         c.created_at, g.depth + 1
-    FROM events c
-    JOIN graph g ON c.parent_id = g.id
-   WHERE c.org_id = $1
-     AND c.execution_id = $2
-     AND (c.iteration IS NULL OR c.iteration = 0)
-     AND g.depth < $3
-)
-SELECT g.id, g.parent_id, g.depth, g.event_type, g.name, g.status,
-       g.conclusion,
-       redact_payload(g.payload) AS payload,
-       g.metadata, g.created_at,
-       CASE WHEN g.loop_id IS NOT NULL THEN (
-         SELECT COUNT(*)::int FROM events s
-          WHERE s.org_id = $1
-            AND s.execution_id = $2
-            AND s.loop_id = g.loop_id
-            AND s.parent_id IS NOT DISTINCT FROM g.parent_id
-       ) END AS iteration_count
-  FROM graph g
- ORDER BY g.depth, g.created_at, g.id
- LIMIT $4`;
+   SELECT e.id, e.parent_id, e.event_type, e.name, e.status, e.conclusion,
+          e.payload, e.metadata, e.loop_id, e.iteration,
+          e.created_at, 1 AS depth
+     FROM events e
+    WHERE e.org_id = $1
+      AND e.execution_id = $2
+      AND ${anchorClause}
+   UNION ALL
+   SELECT c.id, c.parent_id, c.event_type, c.name, c.status, c.conclusion,
+          c.payload, c.metadata, c.loop_id, c.iteration,
+          c.created_at, g.depth + 1
+     FROM events c
+     JOIN graph g ON c.parent_id = g.id
+    WHERE c.org_id = $1
+      AND c.execution_id = $2
+      AND (c.iteration IS NULL OR c.iteration = 0)
+      AND g.depth < $3
+ )
+ SELECT g.id, g.parent_id, g.depth, g.event_type, g.name, g.status,
+        g.conclusion,
+        redact_payload(g.payload) AS payload,
+        g.metadata, g.created_at,
+        CASE WHEN g.loop_id IS NOT NULL THEN (
+          SELECT COUNT(*)::int FROM events s
+           WHERE s.org_id = $1
+             AND s.execution_id = $2
+             AND s.loop_id = g.loop_id
+             AND s.parent_id IS NOT DISTINCT FROM g.parent_id
+        ) END AS iteration_count
+   FROM graph g
+  ORDER BY g.depth, g.created_at, g.id
+  LIMIT $4`;
+  if (capture) {
+    capture.sql = sql;
+    capture.params = params;
+  }
 
-  const { rows } = await db.query<GraphEventRow>(sql, params);
-  return { rows, query: { sql, params } };
+  const { rows } = await pool.query<GraphRow>(sql, params);
+  return rows;
 }

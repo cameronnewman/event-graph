@@ -6,6 +6,7 @@ import {
   listExecutionsForWorkflow,
   listWorkflows,
 } from '../store/index.js';
+import type { Capture } from '../store/events.js';
 
 export const workflowsRouter = Router();
 
@@ -13,13 +14,14 @@ workflowsRouter.get('/api/v1/workflows', async (req, res) => {
   const orgId = requireOrgId(req, res);
   if (!orgId) return;
 
+  const cap: Capture = {};
   const t0 = Date.now();
-  const { rows: workflows, query } = await listWorkflows(pool, orgId);
+  const workflows = await listWorkflows(pool, orgId, cap);
   res.json({
     workflows,
     query_time_ms: Date.now() - t0,
-    query_sql: query.sql,
-    query_params: query.params,
+    query_sql: cap.sql,
+    query_params: cap.params,
   });
 });
 
@@ -32,8 +34,9 @@ workflowsRouter.get('/api/v1/executions/:executionId', async (req, res) => {
   const executionId = requireUuidParam(req, res, 'executionId');
   if (!executionId) return;
 
+  const cap: Capture = {};
   const t0 = Date.now();
-  const { row, query } = await getExecution(pool, orgId, executionId);
+  const row = await getExecution(pool, orgId, executionId, cap);
   if (!row) {
     res.status(404).json({ error: 'execution not found' });
     return;
@@ -41,8 +44,8 @@ workflowsRouter.get('/api/v1/executions/:executionId', async (req, res) => {
   res.json({
     execution: row,
     query_time_ms: Date.now() - t0,
-    query_sql: query.sql,
-    query_params: query.params,
+    query_sql: cap.sql,
+    query_params: cap.params,
   });
 });
 
@@ -56,18 +59,20 @@ workflowsRouter.get(
 
     const limit = Math.min(Number(req.query.limit ?? 100), 500);
 
+    const cap: Capture = {};
     const t0 = Date.now();
-    const { rows: executions, query } = await listExecutionsForWorkflow(
+    const executions = await listExecutionsForWorkflow(
       pool,
       orgId,
       workflowId,
       limit,
+      cap,
     );
     res.json({
       executions,
       query_time_ms: Date.now() - t0,
-      query_sql: query.sql,
-      query_params: query.params,
+      query_sql: cap.sql,
+      query_params: cap.params,
     });
   },
 );

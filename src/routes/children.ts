@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireOrgId, requireUuidParam } from '../middleware.js';
-import { listChildren, type Cursor } from '../store/index.js';
+import { getChildren, parseCursor, type Capture } from '../store/events.js';
 
 export const childrenRouter = Router();
 
@@ -20,42 +20,31 @@ childrenRouter.get(
     const limit = Math.min(Number(req.query.limit ?? 500), 500);
     const rawCursor = req.query.cursor as string | undefined;
 
-    let cursor: Cursor | undefined;
+    let cursor = null;
     if (rawCursor) {
-      const idx = rawCursor.lastIndexOf('|');
-      if (idx === -1) {
+      cursor = parseCursor(rawCursor);
+      if (cursor === null) {
         res
           .status(400)
           .json({ error: "cursor must be '<ISO timestamp>|<uuid>'" });
         return;
       }
-      cursor = {
-        createdAt: rawCursor.slice(0, idx),
-        id: rawCursor.slice(idx + 1),
-      };
     }
 
+    const cap: Capture = {};
     const t0 = Date.now();
-    const { rows, query } = await listChildren(pool, {
-      orgId,
-      executionId,
-      parentId,
-      limit,
-      cursor,
-    });
-
-    const last = rows[rows.length - 1];
-    const nextCursor =
-      rows.length === limit && last
-        ? `${last.created_at.toISOString()}|${last.id}`
-        : null;
+    const { events, nextCursor } = await getChildren(
+      pool,
+      { orgId, executionId, parentId, cursor, limit },
+      cap,
+    );
 
     res.json({
-      events: rows,
+      events,
       next_cursor: nextCursor,
       query_time_ms: Date.now() - t0,
-      query_sql: query.sql,
-      query_params: query.params,
+      query_sql: cap.sql,
+      query_params: cap.params,
     });
   },
 );

@@ -137,9 +137,43 @@ In dev: hit Vite on <http://localhost:5173/> — it proxies `/api/*` to
 Express on `:3000`. For a production-style build (`npm run build --prefix web`),
 Express serves `web/dist/` with a SPA fallback that excludes `/api/`.
 
+## Layout
+
+- `src/store/events.ts` — all SQL lives here. Each query is one exported
+  function returning typed rows. Routes call into this and do nothing else
+  data-shaped.
+- `src/routes/*.ts` — thin: validate inputs, call store, translate result
+  tags (e.g. `event_not_found`) to HTTP status codes.
+- `src/middleware.ts` — `x-org-id` and UUID-param validation.
+- `db/schema.sql` — tables, partial indexes, `redact_payload()`.
+
+## Tests
+
+Integration tests run against a real Postgres via
+`@testcontainers/postgresql`. Each test isolates by a fresh `org_id`, so
+test files can parallelise without truncating between cases.
+
+```bash
+npm test                                # spins up Postgres in Docker
+TEST_DATABASE_URL=postgres://...  npm test   # reuse an existing PG (CI / local)
+```
+
+Coverage as of this commit:
+
+| Query                 | Cases |
+|-----------------------|-------|
+| `getTimeline` (Q1)    | ordering, loop collapse, org isolation, limit, empty execution, redaction |
+| `getChildren` (Q2)    | basic drill, keyset pagination across 3 pages, cursor at boundary, cross-execution guard, org isolation, redaction |
+| `getIterationSibling` (Q3) | sibling lookup, anchor self-match, unknown id, cross-execution, non-loop event, missing iteration, NULL parent (top-level loop), loop_id boundary, redaction |
+| `getGraph` (Query A)  | depth cutoff (1, 2, N), depth stamp, loop collapse, ordering, limit, redaction |
+| `redact_payload()` SQL | visible passes through, unlabeled masked, unknown label masked, field metadata preserved, order preserved, no-fields-key pass-through, fields not an array, empty fields, **nested-fields NOT recursed (documented limitation)** |
+
 ## Known POC scope cuts vs the design
 
 - No `execution_agg` / `event_agg` tables and no CDC consumer — POC is read-only.
 - No retention loop.
 - No Q4 (workflow aggregation) endpoint or `events_workflow_idx`.
-- `redact_payload` assumes a flat `fields` array (design limitation 9).
+- `redact_payload` assumes a flat `fields` array (design limitation 9) — tests
+  lock in the non-recursive behaviour.
+- Generated-column failure on malformed `metadata.iteration` is a write-path
+  concern not exercised by the read tests.

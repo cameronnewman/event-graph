@@ -1,4 +1,5 @@
-import type { OrgSummary, Queryable, StoreResult } from './types.js';
+import type { OrgSummary, Queryable } from './types.js';
+import type { Capture } from './events.js';
 
 const LIST_ORGS_SQL = `SELECT o.org_id,
        o.name,
@@ -12,7 +13,12 @@ const LIST_ORGS_SQL = `SELECT o.org_id,
 
 export async function listOrgs(
   db: Queryable,
-): Promise<StoreResult<OrgSummary>> {
+  capture?: Capture,
+): Promise<OrgSummary[]> {
+  if (capture) {
+    capture.sql = LIST_ORGS_SQL;
+    capture.params = [];
+  }
   const { rows } = await db.query<OrgSummary>(LIST_ORGS_SQL);
-  return { rows, query: { sql: LIST_ORGS_SQL, params: [] } };
+  return rows;
 }

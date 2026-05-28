@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireOrgId, requireUuidParam } from '../middleware.js';
-import { getExecutionGraph } from '../store/index.js';
+import { getGraph, type Capture } from '../store/events.js';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -23,18 +23,17 @@ graphRouter.get('/api/v1/executions/:executionId/graph', async (req, res) => {
     return;
   }
 
+  const cap: Capture = {};
   const t0 = Date.now();
-  const { rows: events, query } = await getExecutionGraph(pool, {
-    orgId,
-    executionId,
-    depth,
-    limit,
-    rootEventId,
-  });
+  const events = await getGraph(
+    pool,
+    { orgId, executionId, depth, limit, rootEventId },
+    cap,
+  );
   res.json({
     events,
     query_time_ms: Date.now() - t0,
-    query_sql: query.sql,
-    query_params: query.params,
+    query_sql: cap.sql,
+    query_params: cap.params,
   });
 });

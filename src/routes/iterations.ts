@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireOrgId, requireUuidParam } from '../middleware.js';
-import { getEventAnchor, getLoopSibling } from '../store/index.js';
+import { getIterationSibling, type Capture } from '../store/events.js';
 
 export const iterationsRouter = Router();
 
@@ -28,37 +28,33 @@ iterationsRouter.get(
       return;
     }
 
+    const cap: Capture = {};
     const t0 = Date.now();
-    const anchorRes = await getEventAnchor(pool, orgId, executionId, parentId);
-    if (!anchorRes.row) {
-      res.status(404).json({ error: 'event not found' });
-      return;
+    const result = await getIterationSibling(
+      pool,
+      { orgId, executionId, eventId: parentId, iteration },
+      cap,
+    );
+    switch (result.kind) {
+      case 'event_not_found':
+        res.status(404).json({ error: 'event not found' });
+        return;
+      case 'not_a_loop':
+        res.status(404).json({ error: 'event is not a loop event' });
+        return;
+      case 'iteration_not_found':
+        res
+          .status(404)
+          .json({ error: `iteration ${iteration} not found for this loop` });
+        return;
+      case 'ok':
+        res.json({
+          event: result.event,
+          query_time_ms: Date.now() - t0,
+          query_sql: cap.sql,
+          query_params: cap.params,
+        });
+        return;
     }
-    if (anchorRes.row.loop_id === null) {
-      res.status(404).json({ error: 'event is not a loop event' });
-      return;
-    }
-
-    const siblingRes = await getLoopSibling(pool, {
-      orgId,
-      executionId,
-      parentId: anchorRes.row.parent_id,
-      loopId: anchorRes.row.loop_id,
-      iteration,
-    });
-    if (!siblingRes.row) {
-      res
-        .status(404)
-        .json({ error: `iteration ${iteration} not found for this loop` });
-      return;
-    }
-
-    // Show only the sibling lookup — the anchor lookup is plumbing.
-    res.json({
-      event: siblingRes.row,
-      query_time_ms: Date.now() - t0,
-      query_sql: siblingRes.query.sql,
-      query_params: siblingRes.query.params,
-    });
   },
 );
